@@ -8,7 +8,6 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertTriangle,
-  Ban,
 } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
 import jsQR from "jsqr";
@@ -31,7 +30,9 @@ export default function ScanBill() {
   const qrInstanceRef = useRef(null);
 
   /* ================= STATUS HELPERS ================= */
-  const getOrderStatus = (order) => String(order?.status || "").toUpperCase();
+  const getOrderStatus = (order) =>
+    String(order?.status || order?.orderStatus || "").toUpperCase();
+
   const isReadyBill = (order) => getOrderStatus(order) === "READY";
   const isDeliveredBill = (order) => getOrderStatus(order) === "DELIVERED";
   const canSelectItems = (order) => isReadyBill(order);
@@ -63,7 +64,7 @@ export default function ScanBill() {
       };
     }
 
-    return null; // READY
+    return null;
   };
 
   /* ================= SCANNER ================= */
@@ -134,9 +135,8 @@ export default function ScanBill() {
   const handleSearch = () => {
     const input = billNoInput.trim();
     if (!input) return;
-    const normalized = input.toUpperCase();
     setIsScanning(false);
-    fetchBill(normalized);
+    fetchBill(input.toUpperCase());
   };
 
   const resetAll = () => {
@@ -162,7 +162,13 @@ export default function ScanBill() {
         {},
         getAuth()
       );
-      setBillDetails(res.data.order);
+
+      // 🔥 IMPORTANT: keep status field consistent
+      setBillDetails({
+        ...res.data.order,
+        status: res.data.order.orderStatus
+      });
+
     } catch {
       setDeliverError("❌ Failed to deliver item.");
     } finally {
@@ -178,7 +184,12 @@ export default function ScanBill() {
         {},
         getAuth()
       );
-      setBillDetails(res.data.order);
+
+      setBillDetails({
+        ...res.data.order,
+        status: res.data.order.orderStatus
+      });
+
     } catch {
       setDeliverError("❌ Mark delivered failed.");
     } finally {
@@ -199,7 +210,6 @@ export default function ScanBill() {
           <QrCode className="text-indigo-400"/> Bill Scanner
         </h1>
 
-        {/* Manual Search */}
         <div className="bg-slate-800 p-4 rounded-xl mb-4 border border-slate-700 flex gap-2">
           <input
             value={billNoInput}
@@ -231,7 +241,7 @@ export default function ScanBill() {
             <div className="bg-white text-black p-4 rounded-lg relative">
               <h2 className="text-center font-bold border-b pb-2">🧾 JJ CANTEEN</h2>
               <p className="text-xs py-2"><b>Bill:</b> {billDetails.billNumber}</p>
-              <p className="text-xs"><b>Status:</b> {billDetails.status}</p>
+              <p className="text-xs"><b>Status:</b> {getOrderStatus(billDetails)}</p>
 
               <table className="w-full text-xs border-t mt-2">
                 <tbody>
@@ -242,7 +252,7 @@ export default function ScanBill() {
                           <button
                             disabled={it.delivered}
                             onClick={() => deliverItem(i)}
-                            className="w-6 h-6 bg-orange-500 text-white rounded"
+                            className={`w-6 h-6 rounded ${it.delivered ? "bg-green-600" : "bg-orange-500"} text-white`}
                           >
                             {it.delivered ? "✓" : "•"}
                           </button>
