@@ -7,7 +7,6 @@ import {
   Search,
   RefreshCw,
   CheckCircle2,
-  Truck,
   AlertTriangle,
   Ban,
 } from "lucide-react";
@@ -15,7 +14,6 @@ import { Html5Qrcode } from "html5-qrcode";
 import jsQR from "jsqr";
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:10000";
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:10000/api";
 
 export default function ScanBill() {
@@ -30,16 +28,13 @@ export default function ScanBill() {
   const [delivering, setDelivering] = useState(false);
   const [deliverError, setDeliverError] = useState("");
 
-  // Persistent reference to the scanner instance
   const qrInstanceRef = useRef(null);
 
-  /* =========================================================
-       ✅ HELPERS
-  ========================================================= */
-  const getOrderStatus = (order) => String(order?.orderStatus || "").toUpperCase();
+  /* ================= STATUS HELPERS ================= */
+  const getOrderStatus = (order) => String(order?.status || "").toUpperCase();
   const isReadyBill = (order) => getOrderStatus(order) === "READY";
   const isDeliveredBill = (order) => getOrderStatus(order) === "DELIVERED";
-  const canSelectItems = (order) => isReadyBill(order) && !isDeliveredBill(order);
+  const canSelectItems = (order) => isReadyBill(order);
 
   const allItemsSelectedDelivered = (order) => {
     const items = order?.items || [];
@@ -47,37 +42,38 @@ export default function ScanBill() {
   };
 
   const overlayMessageForStatus = (order) => {
-    const st = getOrderStatus(order);
     if (!order) return null;
+    const st = getOrderStatus(order);
+
     if (st === "DELIVERED") {
       return {
-        title: "✅ Already Delivered",
-        desc: "This bill is already delivered.",
+        title: "⚠️ Already Delivered",
+        desc: order.message || "This bill is already delivered.",
         icon: <CheckCircle2 className="w-6 h-6 text-green-400" />,
         color: "border-green-600 bg-green-900/40 text-green-200",
       };
     }
-    if (st === "READY") return null;
-    return {
-      title: `⚠️ Status: ${st}`,
-      desc: "Only READY bills can be delivered.",
-      icon: <Ban className="w-6 h-6 text-red-400" />,
-      color: "border-red-600 bg-red-900/40 text-red-200",
-    };
+
+    if (st === "PLACED") {
+      return {
+        title: "⏳ Not Ready Yet",
+        desc: order.message || "Order is not ready for delivery.",
+        icon: <AlertTriangle className="w-6 h-6 text-yellow-400" />,
+        color: "border-yellow-600 bg-yellow-900/40 text-yellow-200",
+      };
+    }
+
+    return null; // READY
   };
 
-  /* =========================================================
-       ✅ SCANNER ENGINE (FIXED SPLIT-SCREEN)
-  ========================================================= */
+  /* ================= SCANNER ================= */
   const stopScanner = async () => {
     if (qrInstanceRef.current && qrInstanceRef.current.isScanning) {
       try {
         await qrInstanceRef.current.stop();
         qrInstanceRef.current.clear();
         qrInstanceRef.current = null;
-      } catch (err) {
-        console.warn("Scanner stop error:", err);
-      }
+      } catch {}
     }
   };
 
@@ -85,12 +81,9 @@ export default function ScanBill() {
     let isMounted = true;
 
     const startScanner = async () => {
-      // 1. Always stop existing scanner first
       await stopScanner();
-
       if (!isScanning || !isMounted) return;
 
-      // 2. Small delay to ensure the DOM node #qr-reader is rendered and ready
       setTimeout(async () => {
         try {
           const scanner = new Html5Qrcode("qr-reader");
@@ -102,50 +95,29 @@ export default function ScanBill() {
             (decodedText) => {
               if (isMounted) {
                 setQrData(decodedText);
-                setIsScanning(false); // This triggers the cleanup via dependency array
+                setIsScanning(false);
               }
-            },
-            () => {} // Ignore frame errors
+            }
           );
-        } catch (err) {
-          console.error("Scanner Start Error:", err);
+        } catch {
           if (isMounted) setError("❌ Camera access failed. Try manual input.");
         }
-      }, 300); // 300ms buffer for React DOM stability
+      }, 300);
     };
 
     startScanner();
-
-    return () => {
-      isMounted = false;
-      stopScanner();
-    };
+    return () => { isMounted = false; stopScanner(); };
   }, [isScanning]);
 
-  /* =========================================================
-       ✅ API CALLS
-  ========================================================= */
-  const fetchBillByQrNumber = async (num) => {
+  /* ================= API CALLS ================= */
+  const fetchBill = async (num) => {
     setLoadingBill(true);
     setError("");
     try {
-      const res = await axios.get(`${API_BASE_URL}/orders/details/${num}`);
+      const res = await axios.get(`${API_BASE_URL}/orders/scan/${num}`);
       setBillDetails(res.data);
-    } catch (e) {
+    } catch {
       setError("❌ Bill not found.");
-    } finally {
-      setLoadingBill(false);
-    }
-  };
-
-  const fetchBillByBillNumber = async (num) => {
-    setLoadingBill(true);
-    setError("");
-    try {
-      const res = await axios.get(`${API_BASE_URL}/orders/details-by-bill/${num}`);
-      setBillDetails(res.data);
-    } catch (e) {
-      setError("❌ Invalid Bill Number.");
     } finally {
       setLoadingBill(false);
     }
@@ -155,36 +127,16 @@ export default function ScanBill() {
     if (!qrData) return;
     const parts = qrData.split("/api/orders/bill/");
     const num = parts.length === 2 ? parts[1].trim() : null;
-    if (num) fetchBillByQrNumber(num);
+    if (num) fetchBill(num);
     else setError("❌ Invalid QR Content.");
   }, [qrData]);
-
-  const handleFileUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.src = reader.result;
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width; canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-        const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
-        if (code) { setQrData(code.data); setIsScanning(false); }
-        else setError("❌ No QR found in image.");
-      };
-    };
-    reader.readAsDataURL(file);
-  };
 
   const handleSearch = () => {
     const input = billNoInput.trim();
     if (!input) return;
-    const normalized = /^\d+$/.test(input) ? `BILL-${input}` : input.toUpperCase();
+    const normalized = input.toUpperCase();
     setIsScanning(false);
-    fetchBillByBillNumber(normalized);
+    fetchBill(normalized);
   };
 
   const resetAll = () => {
@@ -196,32 +148,42 @@ export default function ScanBill() {
     setIsScanning(true);
   };
 
-  /* =========================================================
-       ✅ DELIVERY LOGIC
-  ========================================================= */
+  /* ================= DELIVERY ================= */
   const getAuth = () => ({
-    headers: { Authorization: `Bearer ${localStorage.getItem("chefToken") || localStorage.getItem("admin_token")}` }
+    headers: { Authorization: `Bearer ${localStorage.getItem("chefToken")}` }
   });
 
   const deliverItem = async (idx) => {
     if (deliveringIndex !== null || !canSelectItems(billDetails)) return;
     setDeliveringIndex(idx);
     try {
-      const res = await axios.patch(`${API_BASE_URL}/orders/admin/${billDetails.billNumber}/items/${idx}/deliver`, {}, getAuth());
+      const res = await axios.patch(
+        `${API_BASE_URL}/orders/admin/${billDetails.billNumber}/items/${idx}/deliver`,
+        {},
+        getAuth()
+      );
       setBillDetails(res.data.order);
-    } catch (e) {
+    } catch {
       setDeliverError("❌ Failed to deliver item.");
-    } finally { setDeliveringIndex(null); }
+    } finally {
+      setDeliveringIndex(null);
+    }
   };
 
   const markBillDelivered = async () => {
     setDelivering(true);
     try {
-      const res = await axios.patch(`${API_BASE_URL}/orders/admin/${billDetails.billNumber}/mark-delivered`, {}, getAuth());
+      const res = await axios.patch(
+        `${API_BASE_URL}/orders/admin/${billDetails.billNumber}/mark-delivered`,
+        {},
+        getAuth()
+      );
       setBillDetails(res.data.order);
-    } catch (e) {
+    } catch {
       setDeliverError("❌ Mark delivered failed.");
-    } finally { setDelivering(false); }
+    } finally {
+      setDelivering(false);
+    }
   };
 
   const overlay = overlayMessageForStatus(billDetails);
@@ -229,91 +191,91 @@ export default function ScanBill() {
   return (
     <div className="min-h-screen bg-slate-900 text-white p-4">
       <div className="max-w-lg mx-auto">
-        <button onClick={() => navigate("/")} className="flex items-center gap-2 mb-4 text-orange-400"><ArrowLeft size={18}/> Back</button>
-        
-        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2"><QrCode className="text-indigo-400"/> Bill Scanner</h1>
+        <button onClick={() => navigate("/")} className="flex items-center gap-2 mb-4 text-orange-400">
+          <ArrowLeft size={18}/> Back
+        </button>
+
+        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+          <QrCode className="text-indigo-400"/> Bill Scanner
+        </h1>
 
         {/* Manual Search */}
-        <div className="bg-slate-800 p-4 rounded-xl mb-4 border border-slate-700">
-          <div className="flex gap-2">
-            <input 
-              value={billNoInput} 
-              onChange={e => setBillNoInput(e.target.value)}
-              placeholder="Enter Bill Number"
-              className="flex-1 bg-slate-900 border border-slate-600 p-2 rounded-lg outline-none focus:border-green-500"
-            />
-            <button onClick={handleSearch} className="bg-green-600 px-4 py-2 rounded-lg font-bold"><Search size={20}/></button>
-          </div>
+        <div className="bg-slate-800 p-4 rounded-xl mb-4 border border-slate-700 flex gap-2">
+          <input
+            value={billNoInput}
+            onChange={e => setBillNoInput(e.target.value)}
+            placeholder="Enter Bill Number"
+            className="flex-1 bg-slate-900 border border-slate-600 p-2 rounded-lg"
+          />
+          <button onClick={handleSearch} className="bg-green-600 px-4 py-2 rounded-lg font-bold">
+            <Search size={20}/>
+          </button>
         </div>
 
-        {/* Live Camera */}
-        {isScanning && (
-          <div className="bg-slate-800 p-2 rounded-xl mb-4 border border-slate-700">
-            <div id="qr-reader" className="w-full rounded-lg overflow-hidden bg-black min-h-[250px]" />
-          </div>
-        )}
-
-        {/* File Upload */}
-        <div className="bg-slate-800 p-4 rounded-xl mb-4 border border-slate-700 text-center">
-          <label className="cursor-pointer bg-indigo-600 px-4 py-2 rounded-lg font-bold flex items-center justify-center gap-2">
-            <Upload size={18}/> Upload QR Image
-            <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
-          </label>
-        </div>
+        {isScanning && <div id="qr-reader" className="w-full rounded-lg bg-black min-h-[250px]" />}
 
         {loadingBill && <p className="text-center text-orange-400 animate-pulse">Fetching Bill...</p>}
 
-        {/* Bill Result */}
         {billDetails && !loadingBill && (
           <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
             {overlay && (
               <div className={`p-3 rounded-lg border mb-4 flex gap-2 ${overlay.color}`}>
-                {overlay.icon} <div><p className="font-bold">{overlay.title}</p><p className="text-xs">{overlay.desc}</p></div>
+                {overlay.icon}
+                <div>
+                  <p className="font-bold">{overlay.title}</p>
+                  <p className="text-xs">{overlay.desc}</p>
+                </div>
               </div>
             )}
 
             <div className="bg-white text-black p-4 rounded-lg relative">
-              {!canSelectItems(billDetails) && <div className="absolute inset-0 bg-black/10 z-10 rounded-lg pointer-events-none" />}
               <h2 className="text-center font-bold border-b pb-2">🧾 JJ CANTEEN</h2>
-              <div className="text-xs py-2">
-                <p><b>Bill:</b> {billDetails.billNumber}</p>
-                <p><b>Status:</b> {billDetails.orderStatus}</p>
-              </div>
+              <p className="text-xs py-2"><b>Bill:</b> {billDetails.billNumber}</p>
+              <p className="text-xs"><b>Status:</b> {billDetails.status}</p>
 
-              <table className="w-full text-xs border-t">
-                <thead><tr className="bg-slate-100"><th className="p-1 border">S</th><th className="p-1 border text-left">Item</th><th className="p-1 border">Qty</th></tr></thead>
+              <table className="w-full text-xs border-t mt-2">
                 <tbody>
-                  {(billDetails.items || []).map((it, i) => (
-                    <tr key={i} className={it.delivered ? "bg-green-100" : ""}>
-                      <td className="p-1 border text-center">
-                        <button 
-                          disabled={it.delivered || !canSelectItems(billDetails)}
-                          onClick={() => deliverItem(i)}
-                          className={`w-6 h-6 rounded ${it.delivered ? 'bg-green-600 text-white' : 'bg-orange-500 text-white'}`}
-                        >
-                          {it.delivered ? "✓" : "•"}
-                        </button>
+                  {isReadyBill(billDetails) ? (
+                    billDetails.items.map((it, i) => (
+                      <tr key={i}>
+                        <td>
+                          <button
+                            disabled={it.delivered}
+                            onClick={() => deliverItem(i)}
+                            className="w-6 h-6 bg-orange-500 text-white rounded"
+                          >
+                            {it.delivered ? "✓" : "•"}
+                          </button>
+                        </td>
+                        <td>{it.name}</td>
+                        <td>{it.quantity}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="3" className="text-center p-2 text-gray-500">
+                        No items to display
                       </td>
-                      <td className="p-1 border">{it.name}</td>
-                      <td className="p-1 border text-center">{it.quantity}</td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
 
               {allItemsSelectedDelivered(billDetails) && !isDeliveredBill(billDetails) && (
-                <button onClick={markBillDelivered} disabled={delivering} className="w-full bg-green-600 text-white py-2 mt-4 rounded-lg font-bold">
+                <button onClick={markBillDelivered} className="w-full bg-green-600 text-white py-2 mt-4 rounded-lg font-bold">
                   {delivering ? "Marking..." : "Mark Fully Delivered"}
                 </button>
               )}
             </div>
-            <button onClick={resetAll} className="w-full bg-slate-700 py-2 mt-4 rounded-lg font-bold flex items-center justify-center gap-2">
+
+            <button onClick={resetAll} className="w-full bg-slate-700 py-2 mt-4 rounded-lg font-bold flex justify-center gap-2">
               <RefreshCw size={18}/> Scan Another
             </button>
           </div>
         )}
 
-        {error && <p className="mt-4 p-3 bg-red-900/50 border border-red-500 text-red-200 rounded-lg text-sm">{error}</p>}
+        {error && <p className="mt-4 p-3 bg-red-900/50 border border-red-500 rounded-lg">{error}</p>}
+        {deliverError && <p className="mt-2 text-red-400 text-sm">{deliverError}</p>}
       </div>
     </div>
   );
