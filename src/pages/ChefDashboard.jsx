@@ -6,14 +6,13 @@ import {
   AlertTriangle,
   LogOut,
   RefreshCw,
-  Timer,
   X,
 } from "lucide-react";
 import axios from "axios";
 
 // === CONFIGURATION ===
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:10000/api";
+// Ensure this matches your backend's base API path
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:10000/api";
 
 // Simple slide-up animation for the modal & Sparkle styles
 const GlobalStyles = () => (
@@ -45,8 +44,7 @@ const GlobalStyles = () => (
 
 // --- SparkleOverlay Component ---
 const SparkleOverlay = () => {
-  const random = (min, max) =>
-    Math.floor(Math.random() * (max - min + 1)) + min;
+  const random = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
   const sparks = Array.from({ length: 40 }).map((_, i) => {
     const style = {
@@ -75,15 +73,13 @@ const formatTime = (dateString) => {
 // ===============================================
 // API INTEGRATION FUNCTIONS
 // ===============================================
-const getAuthHeaders = () => {
-  const token =
-    localStorage.getItem("chefToken") || localStorage.getItem("admin_token");
 
-  // If you want, you can allow no token:
-  // return { "Content-Type": "application/json" };
+// ✅ FIX: Consolidated token retrieval to prevent "Invalid token" errors
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("admin_token") || localStorage.getItem("chefToken");
 
   if (!token) {
-    throw new Error("Token expired or missing.");
+    throw new Error("Invalid or expired token");
   }
 
   return {
@@ -96,13 +92,14 @@ const fetchStaffOrders = async (handleLogout) => {
   try {
     const headers = getAuthHeaders();
 
-    // ✅ correct endpoint
+    // Fetches orders meant for staff preparation
     const response = await axios.get(`${API_BASE_URL}/staff/orders`, {
       headers,
     });
 
     return response.data;
   } catch (error) {
+    // If token is rejected, force logout to clear storage
     if (error.response && error.response.status === 401) {
       handleLogout();
       throw new Error("Session expired. Please log in again.");
@@ -118,10 +115,11 @@ const fetchStaffOrders = async (handleLogout) => {
   }
 };
 
-// ✅ Mark ready endpoint
+// ✅ FIX: Standardized endpoint for marking orders as ready
 const markOrderAsReady = async (billNumber) => {
   const headers = getAuthHeaders();
 
+  // Ensuring the URL structure matches the backend route registration
   const response = await axios.patch(
     `${API_BASE_URL}/orders/admin/${billNumber}/mark-ready`,
     {},
@@ -253,7 +251,8 @@ const OrderCard = ({ order, updateStatus, loading, onViewBill }) => {
   const orderIdentifier = order.billNumber;
   const isActionDisabled = loading || isUpdating;
 
-  const handleAction = async () => {
+  const handleAction = async (e) => {
+    e.stopPropagation(); // Prevent opening modal when clicking the button
     setIsUpdating(true);
     setCardError(null);
 
@@ -342,35 +341,38 @@ export default function ChefDashboard({ handleLogout }) {
   const [selectedOrder, setSelectedOrder] = useState(null);
 
   const loadOrders = useCallback(async () => {
-    if (!loading) setLoading(true);
+    // Only show full-screen loader on initial mount to prevent flashing
+    if (orders.length === 0) setLoading(true);
     setError(null);
 
     try {
       const fetchedOrders = await fetchStaffOrders(handleLogout);
 
-      // ✅ Orders are already paid from backend.
-      // But keep safe filter:
+      // Filtering to only show PAID orders that need preparation
       const paidOrders = (fetchedOrders || []).filter(
-        (o) => o.paymentStatus === "PAID"
+        (o) => o.paymentStatus === "PAID" || o.paymentStatus === "Paid"
       );
 
       setOrders(paidOrders);
     } catch (e) {
       console.error("Dashboard Load Error:", e.message);
-      if (!e.message.includes("Session expired")) setError(e.message);
+      // Don't show error overlay if it's an auth redirect
+      if (!e.message.includes("expired") && !e.message.includes("expired")) {
+        setError(e.message);
+      }
     } finally {
       setLoading(false);
     }
-  }, [handleLogout]);
+  }, [handleLogout, orders.length]);
 
   const handleMarkReady = useCallback(async (billNumber) => {
     try {
       await markOrderAsReady(billNumber);
 
-      // ✅ remove from screen
+      // Instantly remove from local state for better UX
       setOrders((prev) => prev.filter((o) => o.billNumber !== billNumber));
 
-      // ✅ close modal
+      // Close modal if the ready order was currently selected
       setSelectedOrder((prevSelected) =>
         prevSelected && prevSelected.billNumber === billNumber ? null : prevSelected
       );
@@ -385,7 +387,7 @@ export default function ChefDashboard({ handleLogout }) {
     }
   }, []);
 
-  // Polling Effect
+  // Polling Effect - Refresh every 10 seconds
   useEffect(() => {
     loadOrders();
     const intervalId = setInterval(loadOrders, 10000);
@@ -433,7 +435,7 @@ export default function ChefDashboard({ handleLogout }) {
               disabled={loading}
               className="flex items-center text-sm text-white bg-indigo-600 hover:bg-indigo-700 py-2 px-4 rounded-lg font-semibold transition duration-200 shadow-md disabled:bg-slate-500 disabled:cursor-not-allowed"
             >
-              {loading ? (
+              {loading && orders.length === 0 ? (
                 <Loader className="w-4 h-4 mr-2 animate-spin" />
               ) : (
                 <RefreshCw className="w-4 h-4 mr-2" />
